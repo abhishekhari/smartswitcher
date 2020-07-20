@@ -1,0 +1,186 @@
+#include "ACS712.h"
+ACS712 sensor1(ACS712_05B, A0);
+
+#include <SoftwareSerial.h>
+SoftwareSerial nodeMCUSerial (10, 11);
+
+#include <Wire.h> 
+#include <LiquidCrystal_I2C.h>
+LiquidCrystal_I2C lcd(0x27, 16, 2);
+
+#include <TimerOne.h>
+#include <EEPROM.h>
+
+#define lineVoltagePin  A3
+#define buzzer          13
+#define SSR_1           2
+#define SSR_2           3
+#define SSR_3           4
+
+#define touch_1         5
+#define touch_2         6
+#define touch_3         7
+
+float lineCurrent = 0, lineVoltage = 0, linePower = 0, unit_in_Wh = 0, presentPW = 0, previousWH = 0, totalUnit = 0;
+int count = 0, runningFlag, smsFlag = 0;
+boolean toggle_1  = false, toggle_2  = false, toggle_3  = false,;
+
+void timerIsr(){
+  count ++;
+  if (count == 10){
+    Timer1.detachInterrupt ();
+    count = 0;
+    if (linePower != 0){
+      presentPW = linePower / 3600;
+      EEPROM.get(0, unit_in_Wh);
+      unit_in_Wh = unit_in_Wh + presentPW;
+      EEPROM.put(0, unit_in_Wh);
+    }
+    
+    Timer1.attachInterrupt( timerIsr );
+  }
+}
+
+void setup() {
+  // put your setup code here, to run once:
+  Serial.begin (9600);
+  pinMode (dev1Relay, OUTPUT);
+  digitalWrite (dev1Relay, HIGH);
+  pinMode (buzzer, OUTPUT);
+
+  lcd.init();
+  lcd.backlight();
+  lcd.setCursor(0,0);
+  lcd.print (" Power Metering ");
+  delay (2500);
+
+  nodeMCUSerial.begin (9600);
+  lcd.clear ();
+  lcd.setCursor (0, 0);
+  lcd.print (" Wifi  synching ");
+  
+  int wait = 1;
+  while(wait == 1){
+    if(nodeMCUSerial.available() > 0){
+      if(nodeMCUSerial.read() == '^'){
+        wait = 0;
+        
+        digitalWrite (13, HIGH);
+        delay (75);
+        digitalWrite (13, LOW);
+      }
+    }
+  }
+
+  delay(1000);
+  lcd.clear ();
+  lcd.setCursor (0, 0);
+  lcd.print ("  Wifi & db OK  ");
+  delay (1500);
+  
+  lcd.clear ();
+  lcd.setCursor (0, 0);
+  lcd.print (" Calibrating... ");
+  
+  sensor1.calibrate();
+
+  EEPROM.get (0, unit_in_Wh);
+  digitalWrite (dev1Relay, LOW);
+  Timer1.initialize (100000);
+  Timer1.attachInterrupt ( timerIsr );
+}
+
+void loop() {
+  if (nodeMCUSerial.available () > 0) {
+    char recVal = nodeMCUSerial.read ();
+    delay (20);
+    if (recVal == 'A') {
+      digitalWrite (SSR_1, LOW);
+    }
+    else if (recVal == 'a') {
+      digitalWrite (SSR_1, HIGH);
+    }
+    else if (recVal == 'B') {
+      digitalWrite (SSR_2, LOW);
+    }
+    else if (recVal == 'b') {
+      digitalWrite (SSR_2, HIGH);
+    }
+    else if (recVal == 'C') {
+      digitalWrite (SSR_3, LOW);
+    }
+    else if (recVal == 'c') {
+      digitalWrite (SSR_3, HIGH);
+    }
+    else if (recVal == 'R') {
+      Serial.print ("*");
+      Serial.print (lineVoltage);
+      Serial.print (",");
+      Serial.print (lineCurrent);
+      Serial.print (",");
+      Serial.print (linePower);
+      Serial.print (",");
+      Serial.print (unit_in_Wh);
+      Serial.print ("#");
+
+      nodeMCUSerial.print ("*");
+      nodeMCUSerial.print (unit_in_Wh);
+      nodeMCUSerial.print ("#");
+
+      EEPROM.get(10, previousWH);
+      delay (10);
+      EEPROM.put(10, unit_in_Wh);
+
+      totalUnit = unit_in_Wh - previousWH;
+      smsFlag = 1;
+    }
+  }
+
+  lineCurrent = sensor1.getCurrentAC();
+  if (lineCurrent < 0.15){
+    lineCurrent = 0;
+  }
+
+  if (digitalRead (touch_1) == HIGH) {
+    delay (100);
+    if (digitalRead (touch_1) == HIGH) {
+      toggle_1 = !toggle_1;
+      digitalWrite (SSR_1, toggle_1);
+    }
+  }
+
+  if (digitalRead (touch_2) == HIGH) {
+    delay (100);
+    if (digitalRead (touch_2) == HIGH) {
+      toggle_2 = !toggle_2;
+      digitalWrite (SSR_2, toggle_2);
+    }
+  }
+
+  if (digitalRead (touch_3) == HIGH) {
+    delay (100);
+    if (digitalRead (touch_3) == HIGH) {
+      toggle_3 = !toggle_3;
+      digitalWrite (SSR_3, toggle_3);
+    }
+  }
+
+  lineVoltage = analogRead (lineVoltagePin) * 244.14;
+  lineVoltage = lineVoltage / 1000;
+  
+  linePower = lineVoltage * lineCurrent;
+  
+  lcd.setCursor (0, 0);
+  lcd.print("V:      I:      ");
+  lcd.setCursor (3, 0);
+  lcd.print(lineVoltage);
+  lcd.setCursor (11, 0);
+  lcd.print(lineCurrent);
+  
+  lcd.setCursor (0, 1);
+  lcd.print("Unit :        Wh");
+  lcd.setCursor (7, 1);
+  lcd.print(unit_in_Wh);
+  delay (1500);
+}
+
